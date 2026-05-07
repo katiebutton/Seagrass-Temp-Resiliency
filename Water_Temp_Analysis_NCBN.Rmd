@@ -1,0 +1,742 @@
+---
+title: "NCBN Thermal Report"
+execute:
+  message: false
+  warning: false
+editor options: 
+  markdown:
+    wrap: none
+output: 
+  html_document:
+    keep_md: false
+    toc: true
+    toc_float: true
+    fig_caption: true
+    number_sections: false
+    df_print: kable
+    theme: journal
+    css: journalnps.min.css
+    includes:
+        before_body:
+          - header.html
+date: "2026-05-05"
+params:
+  park: "CACO" #change to FIIS or CACO when knitting for park specific report
+  park_name: "Cape Cod National Seashore"
+---
+
+```{r setup, include=FALSE}
+
+# Libraries (load once)
+library(tidyverse)
+library(readxl)
+library(ggrepel)
+library(glue)
+library(fs)
+library(scales)   # for label_number
+library(here) # use to load data from relative paths
+
+# -------------------------------
+# 0) GLOBAL STYLE + PALETTE
+# -------------------------------
+theme_set(theme_classic(base_size = 14))
+
+# Locked legend order for Park_Code
+park_levels <- c("ASIS", "FIIS", "CACO")
+
+# Consistent colors and shapes everywhere
+park_pal    <- c("ASIS"="#1f77b4","FIIS"="#ff7f00","CACO"="#2ca02c")
+park_shapes <- c("ASIS"=16,"FIIS"=17,"CACO"=15)
+
+# Accent colors for thresholds/extreme markers (not mapped to Park_Code)
+grey_grid     <- "grey40"
+accent_red    <- "#d62728"
+accent_blue   <- "#1f78b4"
+accent_purple <- "#8b3fb9"
+
+# Reusable scales—use these in every plot that maps color/fill/shape to Park_Code
+scale_park_color <- function(...) scale_color_manual(values = park_pal, breaks = park_levels, ...)
+scale_park_fill  <- function(...) scale_fill_manual(values  = park_pal, breaks = park_levels, ...)
+scale_park_shape <- function(...) scale_shape_manual(values = park_shapes, breaks = park_levels, ...)
+
+```
+
+```{r Load Data, include= FALSE}
+dat <- read_excel(here::here("data", "Site_Summary_Master_b.xlsx"), sheet = "Site_Year") %>%
+  rename_with(~ gsub(" ", "_", .)) %>%
+  mutate(
+    Park_Code              = toupper(Park_Code),
+    Park_Code              = factor(Park_Code, levels = park_levels), # lock legend order
+    Mean_HDH_daily         = suppressWarnings(as.numeric(Mean_HDH_daily)),
+    Mean_CDH_daily         = suppressWarnings(as.numeric(Mean_CDH_daily)),
+    `%_abv_thres`          = suppressWarnings(as.numeric(`%_abv_thres`)),
+    Number_warming_events  = suppressWarnings(as.numeric(Number_warming_events)),
+    Year                   = suppressWarnings(as.integer(Year)),
+    Transect               = toupper(gsub("[^A-Za-z]", "", trimws(Transect)))
+  )
+
+
+```
+
+```{r helper functions, include=FALSE}
+# Site-year (avg across transects) -> Site-level (avg across years)
+make_site_level <- function(df, metrics = c("Mean_HDH_daily","Mean_CDH_daily","%_abv_thres")) {
+  df %>%
+    dplyr::group_by(Park_Code, Site_Name, Year) %>%
+    dplyr::summarise(
+      HDH_year     = if ("Mean_HDH_daily" %in% metrics) mean(Mean_HDH_daily, na.rm = TRUE) else NA_real_,
+      CDH_year     = if ("Mean_CDH_daily" %in% metrics) mean(Mean_CDH_daily, na.rm = TRUE) else NA_real_,
+      pct_hot_year = if ("%_abv_thres"    %in% metrics) mean(`%_abv_thres`,    na.rm = TRUE) else NA_real_,
+      .groups = "drop"
+    ) %>%
+    dplyr::group_by(Park_Code, Site_Name) %>%
+    dplyr::summarise(
+      mean_HDH = mean(HDH_year,     na.rm = TRUE),
+      mean_CDH = mean(CDH_year,     na.rm = TRUE),
+      pct_hot  = mean(pct_hot_year, na.rm = TRUE),
+      n_years  = dplyr::n_distinct(Year),
+      .groups  = "drop"
+    ) %>%
+    dplyr::mutate(Label = paste0(Site_Name, " (n=", n_years, ")"))
+}
+
+# Flag extreme years per site (e.g., 90th percentile of metric within each site)
+flag_extreme_by_site <- function(df, value_col, prob = 0.9, flag_name = "Extreme") {
+  df %>%
+    dplyr::group_by(Site_Name) %>%
+    dplyr::mutate(
+      thresh = stats::quantile(.data[[value_col]], prob, na.rm = TRUE),
+      "{flag_name}" := .data[[value_col]] >= .data[["thresh"]]
+    ) %>%
+    dplyr::ungroup()
+  
+}
+
+# Number of monitoring years per park
+years_per_park <- function(df) {
+  df %>%
+    dplyr::group_by(Park_Code) %>%
+    dplyr::summarise(
+      n_years    = dplyr::n_distinct(Year),
+      first_year = min(Year, na.rm = TRUE),
+      last_year  = max(Year, na.rm = TRUE),
+      .groups    = "drop"
+    )
+}
+
+# Per-park site summary
+site_summary <- function(df) {
+  df %>%
+    dplyr::group_by(Park_Code, Site_Name) %>%
+    dplyr::summarise(
+      n_years = dplyr::n_distinct(Year),
+      .groups = "drop"
+    )
+}
+
+```
+
+```{r filter to park, include= FALSE}
+park_code <- params$park
+dat_pk <- dat %>% filter(park_code == park_code)
+```
+
+```{r Per Park Plotting, include= FALSE}
+# A) High Heat Years (HDH) by site (facetted), one park
+plot_hdh_extreme_by_site <- function(df, park_code) {
+  site_year <- df %>%
+    dplyr::filter(Park_Code == park_code) %>%
+    dplyr::group_by(Site_Name, Year) %>%
+    dplyr::summarise(Mean_HDH = mean(Mean_HDH_daily, na.rm = TRUE), .groups = "drop") %>%
+    flag_extreme_by_site(value_col = "Mean_HDH", prob = 0.9, flag_name = "Extreme")
+  
+  ggplot(site_year, aes(x = Year, y = Mean_HDH)) +
+    geom_line(color = "black", linewidth = 1) +
+    geom_point(size = 2) +
+    geom_point(data = subset(site_year, Extreme), color = accent_red, size = 3.5) +
+    geom_text_repel(
+      data = subset(site_year, Extreme),
+      aes(label = Year), color = accent_red, size = 4, show.legend = FALSE,
+      nudge_x = 0.4, nudge_y = 0.6, hjust = 0, direction = "y",
+      box.padding = 0.3, point.padding = 0.2
+    ) +
+    geom_hline(aes(yintercept = thresh), linetype = "dashed", color = accent_red) +
+    facet_wrap(~ Site_Name, ncol = 1, scales = "free_y") +
+    scale_y_continuous(labels = label_number(accuracy = 1),
+                       expand = expansion(mult = c(0.1, 0.2))) +
+    scale_x_continuous(breaks = seq(min(site_year$Year, na.rm = TRUE), max(site_year$Year, na.rm = TRUE), by = 2)) +
+    labs(
+      title    = glue("High Heat Years by Site ({park_code})"),
+      subtitle = "Red dashed line = site-specific threshold; red points = extreme heat years",
+      x = "Year", y = "Mean Heating Degree Hours per Day"
+    )
+}
+
+# B) Reduced Cooling Years (CDH) by site (facetted), one park
+plot_cdh_lowcool_by_site <- function(df, park_code) {
+  site_year <- df %>%
+    dplyr::filter(Park_Code == park_code) %>%
+    dplyr::group_by(Site_Name, Year) %>%
+    dplyr::summarise(Mean_CDH = mean(Mean_CDH_daily, na.rm = TRUE), .groups = "drop") %>%
+    flag_extreme_by_site(value_col = "Mean_CDH", prob = 0.9, flag_name = "Low_Cooling")
+  
+  ggplot(site_year, aes(x = Year, y = Mean_CDH)) +
+    geom_line(color = "black", linewidth = 1) +
+    geom_point(size = 2) +
+    geom_point(data = subset(site_year, Low_Cooling), color = accent_blue, size = 3.5) +
+    geom_text_repel(
+      data = subset(site_year, Low_Cooling),
+      aes(label = Year), color = accent_blue, size = 4, show.legend = FALSE,
+      nudge_x = 0.4, nudge_y = 0.6, hjust = 0, direction = "y",
+      box.padding = 0.3, point.padding = 0.2
+    ) +
+    geom_hline(aes(yintercept = thresh), linetype = "dashed", color = accent_blue) +
+    facet_wrap(~ Site_Name, ncol = 1, scales = "free_y") +
+    scale_y_continuous(labels = label_number(accuracy = 1),
+                       expand = expansion(mult = c(0.1, 0.2))) +
+    scale_x_continuous(breaks = seq(min(site_year$Year, na.rm = TRUE), max(site_year$Year, na.rm = TRUE), by = 2)) +
+    labs(
+      title    = glue("Reduced Cooling Years by Site ({park_code})"),
+      subtitle = "Blue dashed line = site-specific threshold; blue points = low cooling years",
+      x = "Year", y = "Mean Cooling Degree Hours per Day"
+    )
+}
+
+# C) Double-Stress years (HDH high & CDH high), one park
+plot_double_stress_by_site <- function(df, park_code) {
+  site_year <- df %>%
+    dplyr::filter(Park_Code == park_code) %>%
+    dplyr::group_by(Site_Name, Year) %>%
+    dplyr::summarise(
+      Mean_HDH = mean(Mean_HDH_daily, na.rm = TRUE),
+      Mean_CDH = mean(Mean_CDH_daily, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    dplyr::group_by(Site_Name) %>%
+    dplyr::mutate(
+      hdh_thresh = stats::quantile(Mean_HDH, 0.9, na.rm = TRUE),
+      cdh_thresh = stats::quantile(Mean_CDH, 0.9, na.rm = TRUE),
+      High_Heat   = Mean_HDH >= hdh_thresh,
+      Low_Cooling = Mean_CDH >= cdh_thresh,
+      Double_Stress = High_Heat & Low_Cooling
+    ) %>% dplyr::ungroup()
+  
+  ggplot(site_year, aes(x = Year, y = Mean_HDH)) +
+    geom_line(color = "black", linewidth = 1) +
+    geom_point(size = 2) +
+    geom_point(data = subset(site_year, Double_Stress), color = accent_purple, size = 4) +
+    geom_text_repel(
+      data = subset(site_year, Double_Stress),
+      aes(label = Year), color = accent_purple, size = 4, show.legend = FALSE,
+      nudge_x = 0.4, nudge_y = 0.6, hjust = 0, direction = "y",
+      box.padding = 0.3, point.padding = 0.2
+    ) +
+    geom_hline(aes(yintercept = hdh_thresh), linetype = "dashed", color = accent_red) +
+    facet_wrap(~ Site_Name, ncol = 1, scales = "free_y") +
+    scale_y_continuous(labels = label_number(accuracy = 1),
+                       expand = expansion(mult = c(0.1, 0.2))) +
+    scale_x_continuous(breaks = seq(min(site_year$Year, na.rm = TRUE), max(site_year$Year, na.rm = TRUE), by = 2)) +
+    labs(
+      title    = glue("Thermal Stress Years by Site ({park_code})"),
+      subtitle = "Purple points = years with high heat AND reduced cooling",
+      x = "Year", y = "Mean Heating Degree Hours per Day"
+    )
+}
+```
+
+```{r Regional PLotting Functions, include= FALSE}
+# D) Site-level thermal stress across years (lines colored by Park_Code)
+plot_sitelevel_thermal_stress_lines <- function(df) {
+  site_year <- df %>%
+    dplyr::filter(Park_Code %in% park_levels) %>%
+    dplyr::group_by(Park_Code, Site_Name, Year) %>%
+    dplyr::summarise(Mean_HDH = mean(Mean_HDH_daily, na.rm = TRUE), .groups = "drop")
+  
+  threshold <- stats::quantile(site_year$Mean_HDH, 0.9, na.rm = TRUE)
+  
+  site_labels <- site_year %>%
+    dplyr::group_by(Site_Name) %>%
+    dplyr::filter(Year == max(Year, na.rm = TRUE)) %>%
+    dplyr::ungroup()
+  
+  ggplot(site_year,
+         aes(x = Year, y = Mean_HDH, group = Site_Name, color = Park_Code)) +
+    geom_line(alpha = 0.7, linewidth = 1) +
+    geom_point(size = 2) +
+    geom_text_repel(
+      data = site_labels,
+      aes(label = Site_Name),
+      size = 3.5, direction = "y", hjust = 0,
+      nudge_x = 1, box.padding = 0.5, point.padding = 0.3,
+      segment.color = "grey60", show.legend = FALSE
+    ) +
+    geom_point(
+      data = subset(site_year, Mean_HDH >= threshold),
+      color = accent_red, size = 3
+    ) +
+    geom_text_repel(
+      data = subset(site_year, Mean_HDH >= threshold),
+      aes(label = Year),
+      size = 3, color = accent_red, show.legend = FALSE
+    ) +
+    geom_hline(yintercept = threshold, linetype = "dashed", color = accent_red) +
+    scale_park_color() +
+    scale_x_continuous(breaks = seq(min(site_year$Year, na.rm = TRUE),
+                                    max(site_year$Year, na.rm = TRUE), by = 2)) +
+    expand_limits(x = max(site_year$Year, na.rm = TRUE) + 8) +
+    labs(
+      title    = "Site-Level Thermal Stress Across Years",
+      subtitle = "Lines = sites; labels show site identity and extreme heat years",
+      x = "Year", y = "Mean Heating Degree Hours per Day",
+      color = "Park"
+    )
+}
+
+# E) Thermal stress vs cooling (site-level scatter with size = % hot)
+plot_stress_vs_cooling <- function(df) {
+  site_level <- make_site_level(df, metrics = c("Mean_HDH_daily","Mean_CDH_daily","%_abv_thres"))
+  median_HDH <- 8.8
+  median_CDH <- -94.9
+  
+  x_low  <- median_HDH * 0.5
+  x_high <- max(site_level$mean_HDH, na.rm = TRUE) * 0.8
+  y_low  <- min(site_level$mean_CDH, na.rm = TRUE) * 0.8
+  y_high <- median_CDH * 0.8
+  
+  ggplot(site_level, aes(x = mean_HDH, y = mean_CDH, color = Park_Code, size = pct_hot)) +
+    geom_point(alpha = 0.9) +
+    geom_text_repel(aes(label = Label), size = 4) +
+    geom_vline(xintercept = median_HDH, linetype = "dashed", color = grey_grid) +
+    geom_hline(yintercept = median_CDH, linetype = "dashed", color = grey_grid) +
+    annotate("text", x = x_low,  y = y_high, label = "Stable Systems",          size = 4.5, fontface = "bold") +
+    annotate("text", x = x_high, y = y_high, label = "Chronic Heat Stress",     size = 4.5, fontface = "bold") +
+    annotate("text", x = x_low,  y = y_low,  label = "Thermal Refugia",         size = 4.5, fontface = "bold") +
+    annotate("text", x = x_high, y = y_low,  label = "Dynamic/Flushed Systems", size = 4.5, fontface = "bold") +
+    expand_limits(x = max(site_level$mean_HDH, na.rm = TRUE) * 1.2,
+                  y = min(site_level$mean_CDH, na.rm = TRUE) * 1.2) +
+    scale_park_color() +
+    guides(color = guide_legend(override.aes = list(alpha = 1, size = 4))) +
+    labs(
+      title = "Thermal Stress vs Cooling Relief Across Coastal Monitoring Sites",
+      subtitle = "Site-level averages (transects averaged within year, then across years)",
+      x = "Mean Heating Degree Hours per Day (Thermal Stress)",
+      y = "Mean Cooling Degree Hours per Day (Thermal Recovery)",
+      color = "Park",
+      size  = "% Time Above Threshold"
+    )
+}
+
+# F) Thermal balance (exposure vs cooling, site-level)
+plot_thermal_balance <- function(df) {
+  thermal_balance <- df %>%
+    dplyr::group_by(Park_Code, Site_Name, Year) %>%
+    dplyr::summarise(
+      Exposure_year = mean(`%_abv_thres`, na.rm = TRUE),
+      Cooling_year  = mean(Mean_CDH_daily,  na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    dplyr::group_by(Park_Code, Site_Name) %>%
+    dplyr::summarise(
+      MeanExposure = mean(Exposure_year, na.rm = TRUE),
+      MeanCooling  = mean(Cooling_year,  na.rm = TRUE),
+      n_years      = dplyr::n_distinct(Year),
+      .groups      = "drop"
+    ) %>%
+    dplyr::mutate(Label = paste0(Site_Name, " (n=", n_years, ")"))
+  
+  ggplot(thermal_balance, aes(x = MeanExposure, y = MeanCooling, color = Park_Code)) +
+    geom_point(size = 4, alpha = 0.9) +
+    geom_text_repel(aes(label = Label), size = 3) +
+    scale_park_color() +
+    labs(
+      title    = "Thermal Balance Across Coastal Monitoring Sites",
+      subtitle = "Exposure vs cooling using consistent site-level averaging",
+      x = "Mean % Time Above Threshold (Thermal Exposure)",
+      y = "Mean Cooling Degree Hours (Thermal Recovery)",
+      color = "Park"
+    )
+}
+
+# G) Heat Event Structure (site-level; optional interpretive quadrants)
+plot_heat_event_structure_site <- function(df) {
+  site_level_events <- df %>%
+    dplyr::group_by(Park_Code, Site_Name, Year) %>%
+    dplyr::summarise(
+      Events_year   = mean(Number_warming_events, na.rm = TRUE),
+      Exposure_year = mean(`%_abv_thres`,        na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    dplyr::group_by(Park_Code, Site_Name) %>%
+    dplyr::summarise(
+      MeanEvents   = mean(Events_year,   na.rm = TRUE),
+      MeanExposure = mean(Exposure_year, na.rm = TRUE),
+      n_years      = dplyr::n_distinct(Year),
+      .groups      = "drop"
+    ) %>%
+    dplyr::mutate(Label = paste0(Site_Name, " (n=", n_years, ")"))
+  
+  cluster_df <- site_level_events %>% # create df with only Events and Exposure for fitting k-means
+    mutate(id = paste0(Park_Code, "_", Site_Name)) %>%
+    column_to_rownames(var = "id") %>%
+    ungroup() %>%
+    dplyr::select(MeanEvents, MeanExposure)
+  
+  km_fit <- kmeans(cluster_df, centers = 4, nstart = 2) # fit k-means clusters
+  event_split <- mean(km_fit$centers[1:4])
+  exposure_split <- mean(km_fit$centers[5:8])
+  
+  ggplot(site_level_events, aes(x = MeanEvents, y = MeanExposure, color = Park_Code, shape = Park_Code)) +
+    geom_point(size = 4.5) +
+    geom_text_repel(aes(label = Label), size = 3, max.overlaps = 30) +
+    geom_vline(xintercept = event_split,   linetype = "dashed", color = grey_grid) +
+    geom_hline(yintercept = exposure_split,linetype = "dashed", color = grey_grid) +
+    annotate("text", x = event_split * 0.45, y = max(site_level_events$MeanExposure, na.rm = TRUE) * 0.9,
+             label = "Episodic Heat Waves", size = 4) +
+    annotate("text", x = max(site_level_events$MeanEvents,   na.rm = TRUE) * 0.75, y = max(site_level_events$MeanExposure, na.rm = TRUE) * 0.9,
+             label = "Highly Stressed", size = 4) +
+    annotate("text", x = max(site_level_events$MeanEvents,   na.rm = TRUE) * 0.75, y = exposure_split * 0.5,
+             label = "Chronic Warming", size = 4) +
+    annotate("text", x = event_split * 0.45, y = exposure_split * 0.45,
+             label = "Low Exposure", size = 4) +
+    scale_park_color() +
+    scale_park_shape() +
+    labs(
+      title    = "Heat Event Structure Across Coastal Parks",
+      subtitle = "Points represent site-level averages across monitoring years",
+      x = "Mean Number of Warming Events (Frequency)",
+      y = "Mean % Time Above Threshold (Duration)",
+      color = "Park", shape = "Park"
+    )
+}
+
+# (Optional) H) Thermal balance at TRANSECT level (no interpretation grids)
+plot_thermal_balance_transect <- function(df) {
+  thermal_balance <- df %>%
+    dplyr::filter(Park_Code %in% park_levels) %>%
+    dplyr::group_by(Park_Code, Site_Name, Transect) %>%
+    dplyr::summarise(
+      MeanExposure = mean(`%_abv_thres`,    na.rm = TRUE),
+      MeanCooling  = mean(Mean_CDH_daily,   na.rm = TRUE),
+      n_years      = dplyr::n(),
+      .groups      = "drop"
+    ) %>%
+    dplyr::mutate(Label = paste(Site_Name, Transect))
+  
+  ggplot(thermal_balance, aes(x = MeanExposure, y = MeanCooling, color = Park_Code)) +
+    geom_point(size = 4) +
+    geom_text_repel(aes(label = Label), size = 3) +
+    scale_park_color() +
+    labs(
+      title = "Thermal Balance Across Parks (Transect Level)",
+      x = "Mean % Time Above Threshold",
+      y = "Mean Cooling Degree Hours",
+      color = "Park"
+    )
+}
+
+```
+
+
+## Eelgrass Importance and Vulnerability
+
+Eelgrass (Zostera marina) is a foundational marine plant that supports healthy coastal ecosystems. It improves water quality, stabilizes sediments, provides habitat for fish and invertebrates, and acts as a globally important carbon sink (Novak et al. 2023). When eelgrass meadows decline, the carbon they store can be released back into the water column (Berger et al. 2024). Because eelgrass responds quickly to changes in its environment, it is often considered a “canary in the coal mine” for coastal health (Orth et al. 2006). Its ecological significance is one reason the Northeast Coastal and Barrier Network (NCBN) monitors seagrass conditions over time, especially as concerns rise about the effects of warming waters.
+
+In recent decades, eelgrass along the Northeast U.S. coast has experienced water temperatures that approach or exceed known physiological limits. When water becomes too warm, eelgrass respiration increases faster than photosynthesis, creating stress on the plants. Studies show that temperatures above 25 °C increase the likelihood of eelgrass mortality, and sustained exposure above 30 °C has led to complete die offs in areas such as Chesapeake Bay (Jarvis & Moore 2010; Plaisted et al. 2022, Novak et al. 2023). Long term temperature records from New Hampshire to Maryland indicate that warmer summers are consistently followed by lower eelgrass presence in the next year (Plaisted et al. 2022). Temperature stress is also more severe when combined with poor water clarity, low light, or high nutrient levels. Repeated hot summers without adequate recovery time can lead to large scale declines.
+
+These patterns align with broader climate driven trends. Marine heatwaves, periods when water temperatures exceed the 90th percentile of a 30 year baseline, have become more frequent and more intense (Berger et al. 2024). Such events have already affected corals, kelp forests, and seagrasses worldwide. Research shows that eelgrass meadows experiencing both high heat and little cooling tend to lose shoot density and canopy height, while sites that receive periodic cooling are better able to recover between heat events (Berger et al. 2024).
+
+Other marine systems use cumulative heat stress metrics to understand these risks. NOAA’s Degree Heating Weeks (DHW) index, for example, tracks how much and how long temperatures exceed thresholds that lead to coral bleaching and mortality (Skirving et al. 2020). These tools emphasize that it is the accumulation of heat over time, not single temperature spikes, that often drives ecosystem decline. This same concept is directly relevant to eelgrass.
+
+Calculating cumulative stress frameworks requires long term temperature datasets and NCBN continuous monitoring program does exactly that. To better understand how warming affects eelgrass within the Northeast Coastal and Barrier Network, we used long term temperature datasets to:
+
+1.	Identify years with extreme heat and low cooling,
+2.	Determine where these conditions overlapped to create compounded “stress years,” and
+3.	Compare patterns across parks to understand regional vulnerability.
+
+
+# Methods
+
+## Protocol
+
+The Northeast Coastal and Barrier Network uses a standardized Estuarine Nutrient Enrichment monitoring protocol (Kopp and Neckles, 2009) that includes seagrass condition monitoring (SOP 9). Seagrass condition is characterized using measures of population and shoot structure to track how meadows change. This protocol was developed from the international SeagrassNet program that provides framework for standardzied seagrass monitoring worldwide. 
+
+Within the network, three coastal parks, Assateague Island (ASIS), Fire Island (FIIS), and Cape Cod (CACO) implement the seagrass monitoring protocol.Seagrass condition is monitored across three permanent 50-m transects that run parallel to shore at a shallow, mid-depth, and deep depth. Temperature loggers are attached to each transect to record continuous water temperature data  collected once a year. These longterm records give us on the ground data to observe the thermal environment expereinced by eelgrass meadows. 
+
+For this analysis, we used the continuous water temperature data and focused on the months from May-September to hone in on when thermal stress likely occurs. To ensure data quality in each sampling year, we only include years with 80 percentage data coverage and with at least 10 days of data in three of five months.From this dataset we examined patterns of thermal stress and cooling dynamics with the goal to compare the conditions at  `r params$park` with those at  other long-term National Park Service monitoring sites. 
+
+
+```{r,echo=FALSE}
+library(dplyr)
+library(knitr)
+
+# Use your existing site_summary() and filter to the selected park
+site_sum <- site_summary(dat) %>%
+  filter(Park_Code == params$park) %>%
+  arrange(Site_Name)
+
+# Clean, simple table using only knitr::kable()
+kable(
+  site_sum,
+  col.names = c("Park Code", "Site Name", "Years of Data"),
+  caption = paste0(
+    "Available datasets for each site in ",
+    params$park,
+    " after data filters were applied."
+  )
+)
+```
+
+
+```{r site-info, include=FALSE}
+# Sites NOT considered long-term monitoring
+excluded_sites <- c("EAST HARBOR", "PROVINCETOWN HARBOR")
+
+# All long-term monitoring sites for this park
+longterm_sites <- site_summary(dat) %>%
+  filter(Park_Code == params$park,
+         !toupper(Site_Name) %in% excluded_sites) %>%
+  pull(Site_Name)
+
+# Formatting for narrative (comma-separated list)
+longterm_sites_text <- paste(longterm_sites, collapse = ", ")
+
+# Years of monitoring for the park (unchanged)
+n_years <- years_per_park(dat) %>%
+  filter(Park_Code == params$park) %>%
+  pull(n_years)
+
+first_year <- years_per_park(dat) %>%
+  filter(Park_Code == params$park) %>%
+  pull(first_year)
+
+last_year <- years_per_park(dat) %>%
+  filter(Park_Code == params$park) %>%
+  pull(last_year)
+
+```
+
+## Novel Thermal Metrics for Eelgrass
+
+To describe long-term thermal conditions in eelgrass meadows, we calculate two metrics from our continuous water temperature record: **heating degree hours (HDH)** and **cooling degree hours (CDH)**. Following the methods outlined by Berger et al. 2024, these metrics capture not just how hot the water gets, but how long water temperatures remain above or below a biological threshold.
+
+For eelgrass, prolonged exposure to high temperatures can lead to physiological stress where respiration outpaces photosynthesis. We applied a threshold of 25 °C for northern sites and 28.6 °C for southern sites, values associated with known limits in eelgrass thermal tolerance.
+
+Together, HDH and CDH show how often heat stress events occur and how well the area recovers from them. Looking at both gives us a clearer picture of the factors that shape eelgrass resilience. 
+
+```{r concepts, echo=FALSE, warning=FALSE, fig.show='hold', fig.width=4, fig.width=4}
+### HDH and CDH Concept##
+
+library(tidyverse)
+
+df <- tibble(
+  time = 1:100,
+  temp = 25 + sin(time/10)*3
+)
+
+threshold <- 25
+
+ggplot(df, aes(x = time, y = temp)) +
+  geom_line(size = 1.2) +
+  
+  geom_hline(yintercept = threshold, linetype = "dashed") +
+  
+  geom_ribbon(
+    data = df %>% filter(temp > threshold),
+    aes(ymin = threshold, ymax = temp),
+    fill = "red",
+    alpha = 0.4
+  ) +
+  
+  labs(title = "HDH = Heat Above Threshold") +
+  theme_classic()
+ggplot(df, aes(x = time, y = temp)) +
+  geom_line(size = 1.2) +
+  
+  geom_hline(yintercept = threshold, linetype = "dashed") +
+  
+  geom_ribbon(
+    data = df %>% filter(temp < threshold),
+    aes(ymin = temp, ymax = threshold),
+    fill = "blue",
+    alpha = 0.4
+  ) +
+  
+  labs(title = "CDH = Cooling Below Threshold") +
+  theme_classic()
+
+
+```
+
+# Results
+
+At `r params$park`, the long‑term monitoring site(s) include **`r longterm_sites_text`**, with `r n_years` years of data collected between `r first_year` and `r last_year`. Additional points of interest were included in the analysis to provide broader ecological context but are not included in long‑term monitoring protocol.
+
+## Extreme Heat Years
+At `r params$park`, we identified extreme heat years for each long-term monitoring site by calculating the 90th percentiles of heating degree hours (HDH) as a site-specific threshold. The red points indicated years where the mean HDH exceeded this threshold and are considered "extreme heat years" for that site. These years represent years when the eelgrass meadow at these sites experiences the more intense and prolonged thermal stress. The table below lists years at each moitoring locations when heat degree around were exceptionally high (i.e, HDH above the 90th percentile for that site).
+
+
+```{r plot-hdh, fig.width=10, fig.height=8, fig.cap="Extreme heat years (red points) are years when mean HDH exceeded the site-specific 90th percentile threshold. Each panel shows a long-term monitoring site in `r params$park`.", echo=FALSE}
+plot_hdh_extreme_by_site(dat, park_code)
+```
+
+```{r hdh-extreme-summary, echo=FALSE, results='asis'}
+library(dplyr)
+library(knitr)
+
+# Prepare site-year data for the selected park
+site_year <- dat %>%
+  filter(Park_Code == params$park) %>%
+  group_by(Site_Name, Year) %>%
+  summarise(Mean_HDH = mean(Mean_HDH_daily, na.rm = TRUE), .groups = "drop")
+
+# Use your helper to flag extreme years (90th percentile)
+site_year_extreme <- flag_extreme_by_site(site_year, value_col = "Mean_HDH", prob = 0.9, flag_name = "Extreme") %>%
+  filter(Extreme) %>%
+  arrange(Site_Name, Year)
+
+# Output summary table
+if (nrow(site_year_extreme) > 0) {
+  site_year_extreme %>%
+    group_by(Site_Name) %>%
+    summarise(
+      `Extreme heat years` = paste(Year, collapse = ", ")
+    ) %>%
+    kable(
+      caption = paste0("Extreme heat years (HDH above 90th percentile) at each long-term site in ", params$park, "."),
+      col.names = c("Site", "Extreme heat years")
+    )
+} else {
+  cat("No extreme heat years were detected at the long-term monitoring sites in this park.")
+}
+
+```
+
+
+## Reduced Cooling Years
+
+On the flip side of heat degree hours, we can look at the mean cooling degree hours across `r params$park`. In this context, more negative CDH values represents greater cooling below the temperature threshold at each site. This represents periods of potential relief for eelgrass meadows.
+
+The table below lists the years at each long term monitoring site when cooling degree hours were exceptionally low (i.e, CDH above the 90th percentile for that site). Extreme low cooling years give us insight when thermal relief was lowest that could limit recovery from thermal stress events.
+
+
+
+```{r plot-cdh, fig.width=10, fig.height=8, fig.cap="Low cooling years (blue points) are years when mean CDH exceeded the site-specific 90th percentile threshold. Each panel shows a long-term monitoring site in `r params$park`.", echo=FALSE}
+plot_cdh_lowcool_by_site(dat, park_code)
+```
+
+
+```{r cdh-extreme-summary, echo=FALSE, results='asis'}
+library(dplyr)
+library(knitr)
+
+# Prepare site-year data for the selected park
+site_year_cdh <- dat %>%
+  filter(Park_Code == params$park) %>%
+  group_by(Site_Name, Year) %>%
+  summarise(Mean_CDH = mean(Mean_CDH_daily, na.rm = TRUE), .groups = "drop")
+
+# Use your helper to flag extreme low cooling years (90th percentile)
+site_year_cdh_extreme <- flag_extreme_by_site(site_year_cdh, value_col = "Mean_CDH", prob = 0.9, flag_name = "Extreme") %>%
+  filter(Extreme) %>%
+  arrange(Site_Name, Year)
+
+# Output summary table
+if (nrow(site_year_cdh_extreme) > 0) {
+  site_year_cdh_extreme %>%
+    group_by(Site_Name) %>%
+    summarise(
+      `Extreme low cooling years` = paste(Year, collapse = ", ")
+    ) %>%
+    kable(
+      caption = paste0("Extreme low cooling years (CDH above 90th percentile) at each long-term site in ", params$park, "."),
+      col.names = c("Site", "Extreme low cooling years")
+    )
+} else {
+  cat("No extreme low cooling years were detected at the long-term monitoring sites in this park.")
+}
+```
+
+## Stress Years (Combined Heat and low Cooling)
+
+Now we look at where the years of extreme heat and low cooling intersect. Compounded we defined these as "stress years" at the site. 
+```{r plot-stress, fig.width=10, fig.height=8, fig.cap="Stress years (purple points) are years when mean CDH **and** mean HDH exceeded the site-specific 90th percentile threshold, inidicating compounded stress.", echo=FALSE}
+plot_double_stress_by_site(dat,park_code)
+
+```
+
+```{r double-stress-summary, echo=FALSE, results='asis'}
+library(dplyr)
+library(knitr)
+
+# Summarize double‑stress years (HDH high & CDH high) for each site in the selected park
+
+double_stress <- dat %>%
+  filter(Park_Code == params$park) %>%
+  group_by(Site_Name, Year) %>%
+  summarise(
+    Mean_HDH = mean(Mean_HDH_daily, na.rm = TRUE),
+    Mean_CDH = mean(Mean_CDH_daily, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  group_by(Site_Name) %>%
+  mutate(
+    hdh_thresh = quantile(Mean_HDH, 0.9, na.rm = TRUE),
+    cdh_thresh = quantile(Mean_CDH, 0.9, na.rm = TRUE),
+    High_Heat   = Mean_HDH >= hdh_thresh,
+    Low_Cooling = Mean_CDH >= cdh_thresh,   # high CDH = low cooling
+    Double_Stress = High_Heat & Low_Cooling
+  ) %>%
+  filter(Double_Stress) %>%
+  arrange(Site_Name, Year)
+
+if (nrow(double_stress) > 0) {
+  double_stress %>%
+    group_by(Site_Name) %>%
+    summarise(
+      Double_stress_years = paste(Year, collapse = ", ")
+    ) %>%
+    kable(
+      caption = paste0(
+        "Double‑stress years (high heat & reduced cooling) at each long‑term site in ",
+        params$park, "."
+      ),
+      col.names = c("Site", "Double‑stress years")
+    )
+} else {
+  cat("No double‑stress years were detected at the long‑term monitoring sites in this park.")
+}
+
+```
+
+## How does Park Compare Across the Region?
+```{r regional results, echo=FALSE, fig.width=10, fig.height=6}
+plot_heat_event_structure_site(dat)
+
+```
+
+## What Are the Impact of Cooling?
+
+```{r, echo= FALSE, fig.width=12, fig.height=6}
+plot_stress_vs_cooling(dat)
+```
+
+
+# Key Takeaways
+
+# References
+
+Berger AC, Berg P, McGlathery KJ, Aoki LR, Kerns K (2024) Eelgrass meadow response to heat stress. II. Impacts of ocean warming and marine heatwaves measured by novel metrics. Mar Ecol Prog Ser 736:47-62 https://doi.org/10.3354/meps14588
+
+Jarvis, J.C. & Moore, K.A. (2010). The role of the photosynthetic pathway in the acclimation of Zostera marina to light and temperature stress. Journal of Experimental Marine Biology and Ecology, 395, 105–110.
+
+Kopp, B. S., and H. A. Neckles. 2009. A protocol for monitoring estuarine nutrient enrichment in
+coastal parks of the National Park Service Northeast Region. Natural Resource Report
+NPS/NCBN/NRR—2009/110. National Park Service, Fort Collins, Colorado.
+
+Novak, A. B., Plaisted, H. K., Hughes, Z. J., Mittermayr, A., & Molden, E. (2023). Eelgrass (Zostera marina L.) populations are threatened by high sea-surface temperatures and impaired waters on Nantucket Island, USA. Marine Pollution Bulletin, 197, 115689.
+
+Orth, R. J., Carruthers, T. J., Dennison, W. C., Duarte, C. M., Fourqurean, J. W., Heck, K. L., ... & Williams, S. L. (2006). A global crisis for seagrass ecosystems. Bioscience, 56(12), 987-996.
+
+Plaisted, Holly K., et al. "Influence of rising water temperature on the temperate seagrass species eelgrass (Zostera marina L.) in the Northeast USA." Frontiers in Marine Science 9 (2022): 920699.
+
+Skirving, William, et al. "CoralTemp and the coral reef watch coral bleaching heat stress product suite version 3.1." Remote Sensing 12.23 (2020): 3856.
