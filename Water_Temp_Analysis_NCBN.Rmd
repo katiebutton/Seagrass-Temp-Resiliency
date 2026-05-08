@@ -333,7 +333,7 @@ plot_stress_vs_cooling <- function(df) {
     annotate("text", x = x_limits[1] + ((median_HDH - x_limits[1])/2), y = median_CDH + ((y_limits[2] - median_CDH)/2), vjust = 0.5, hjust = 0.5, label = "Stable Systems", size = 4.5, fontface = "bold") +
     annotate("text", x = x_limits[1] + ((median_HDH - x_limits[1])/2), y = y_limits[1] + ((median_CDH - y_limits[1])/2), vjust = 0.5, hjust = 0.5, label = "Thermal Refugia", size = 4.5, fontface = "bold") +
     annotate("text", x = median_HDH + ((x_limits[2] - median_HDH)/2), y = median_CDH + ((y_limits[2] - median_CDH)/2), vjust = 0.5, hjust = 0.5, label = "Chronic Heat Stress", size = 4.5, fontface = "bold") +
-    annotate("text", x = median_HDH + ((x_limits[2] - median_HDH)/2), y = y_limits[1] + ((median_CDH - y_limits[1])/2), vjust = 0.5, hjust = 0.5, label = "Dynamic/Flushed Systems", size = 4.5, fontface = "bold")
+    annotate("text", x = median_HDH + ((x_limits[2] - median_HDH)/2), y = y_limits[1] + ((median_CDH - y_limits[1])/2), vjust = 0.5, hjust = 0.5, label = "Stress Buffered Systems", size = 4.5, fontface = "bold")
   
 }
 
