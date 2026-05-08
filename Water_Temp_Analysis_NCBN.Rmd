@@ -749,7 +749,7 @@ plot_heat_event_structure_site(dat)
 
 ## What Are the Impact of Cooling?
 
-```{r, echo= FALSE, fig.width=12, fig.height=6, fig.cap="Figure 6"}
+```{r, echo=FALSE, fig.width=12, fig.height=6, fig.cap="Figure 6"}
 plot_stress_vs_cooling(dat)
 ```
 
