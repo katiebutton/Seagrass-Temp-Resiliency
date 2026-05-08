@@ -25,6 +25,14 @@ params:
   park_name: "Cape Cod National Seashore"
 ---
 
+```{=html}
+<style>
+p.caption {
+  font-size: 0.8em;
+}
+</style>
+```
+
 ```{r setup, include=FALSE}
 
 # Libraries (load once)
@@ -62,7 +70,6 @@ accent_purple <- "#8b3fb9"
 scale_park_color <- function(...) scale_color_manual(values = park_pal, breaks = park_levels, ...)
 scale_park_fill  <- function(...) scale_fill_manual(values  = park_pal, breaks = park_levels, ...)
 scale_park_shape <- function(...) scale_shape_manual(values = park_shapes, breaks = park_levels, ...)
-
 ```
 
 ```{r Load-Data, include=FALSE}
@@ -683,6 +690,8 @@ if (nrow(site_year_cdh_extreme) > 0) {
 
 ## Stress Years (Combined Heat and low Cooling)
 
+DRAFT
+
 Now we look at where the years of extreme heat and low cooling intersect. Compounded we defined these as "stress years" at the site.
 
 ```{r plot-stress, fig.width=10, fig.height=8, fig.cap="Figure 4. Stress years (purple points) are years when mean CDH **and** mean HDH exceeded the site-specific 90th percentile threshold, inidicating compounded stress.", echo=FALSE}
@@ -742,18 +751,44 @@ if (nrow(double_stress) > 0) {
 
 ## How does `r params$park` Compare Across the Region?
 
-```{r regional results, echo=FALSE, fig.width=10, fig.height=6, fig.cap="Figure 5"}
+Not all thermal stress at each seagrass monitoring site looks the same. Here we divide the eelgrass meadows into four thermal regimes based on k cluster means:
+
+* **Episodic Heatwave**: Sites with infrequent, but intense heat events
+* **Highly Stressed**: Sites with frequent and prolonged heat events
+* **Low Exposure**: Sites with infrequent and limited time above thermal threshold
+* **Chronic Warming**: Sites with frequent heat events that are not prolonged (pulsing)
+
+```{r regional-results, echo=FALSE, fig.width=10, fig.height=6, fig.cap="Figure 5. Heat event structure across three coastal National Park Service units (CACO, ASIS, FIIS). Each point represents a site-level average of the mean number of warming events per year (frequency) and the mean percentage of time above the thermal threshold (duration). Dashed lines divide the figure into four interpretive thermal regimes. Labels show the average number of monitoring years contributing to each site-level estimate."}
 plot_heat_event_structure_site(dat)
 
 ```
 
-## What Are the Impact of Cooling?
+Across the three coastal NCBN parks, clear regional patterns emerge. At CACO, most sites fall in the category of having fewer and shorter heat‑stress events. An exception is the partially restored East Harbor system, which shows a different pattern. Overall, CACO sites tend to experience heat stress as brief or infrequent pulses rather than long, sustained events.
 
-```{r, echo=FALSE, fig.width=12, fig.height=6, fig.cap="Figure 6"}
+In contrast, Tingles Island at ASIS experience heat stress much more often, and these events add up throughout the season. This pattern is expected for parks located in warmer parts of the region, where longer and more frequent heat events are common.
+
+FIIS sites fall between these two extremes. Heat‑stress conditions vary widely across the park, depending on where each site is located. For example, Moriches Bay shows short, frequent warming events, while the Great South Bay transect experiences longer or more sustained heat episodes. This mix reflects the diversity of habitats and local conditions across Fire Island.
+
+These results show us that sites across the regional scale experience different heat stress conditions and even sites within the same park respond in different ways. This raises an important questions **how are some of the most chronically stressed sites, like Moriches Bay, Pleasant Bay, and Tingles Island,still able to support eelgrass populations**. 
+
+## What Are the Impact of Cooling?
+Now that we've seen sites experience heat stress differently, we can look at relief from heat events. Here we divide the eelgrass into four thermal regimes based on the balance between thermal stress and thermal relief:
+
+* **Stable Systems**: Low heat stress and moderate cooling
+* **Chronic Heat Stress**: High heat stress and limited cooling
+* **Thermal Refugia**: Low heat stress and strong cooling
+* **Stress Buffered Systems**:High heat stress but strong cooling
+
+
+```{r, echo=FALSE, fig.width=12, fig.height=6, fig.cap="Figure 6. Thermal stress and cooling recovery across three coastal National Park Service units (CACO, ASIS, FIIS). Each point represents a site‑level average of the mean heating degree hours per day (thermal stress) and the mean cooling degree hours per day (thermal recovery). Dashed lines divide the figure into four interpretive recovery regimes. Labels show the average number of monitoring years contributing to each site‑level estimate."}
 plot_stress_vs_cooling(dat)
 ```
 
+The balance between heat stress events and cooling recovery also varies across the region and within parks. Pleasant Bay and Moriches Bay receive some of the strongest cooling periods among the chronically warm sites, second only to the fully open tidal systems on Cape Cod. This pattern reflects their positions to inlets where tidal flushing brings in cooler ocean water taht helps moderate warmer temperatures and sustain populations of eelgrass. In contrast, sites with more limited flushing, like Great South Bay and East Harbor, show weaker cooling relief consistent with restricted or partially restored flow. These sites match site conditions that no longer support eelgrass. Tingles Island falls between these two outcomes as it receives little cooling, sits between a stable and thermal refugia zone, and supports sparse eelgrass populations. 
+
 # Key Takeaways
+
+DRAFT
 
 # References
 
